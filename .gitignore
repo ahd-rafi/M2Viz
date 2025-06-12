@@ -1,0 +1,21 @@
+# Ignore virtual environment
+env/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# VS Code or PyCharm
+.vscode/
+.idea/
+
+# Environment variables
+.env
+
+# Node modules (if using React or similar frontend)
+node_modules/
+
+# System files
+.DS_Store
+Thumbs.db

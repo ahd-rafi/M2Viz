@@ -1,0 +1,39 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ./backend
+    restart: always
+    image: 533267400310.dkr.ecr.us-west-1.amazonaws.com/ciods_2025_backend
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: always
+    image: 533267400310.dkr.ecr.us-west-1.amazonaws.com/ciods_2025_frontend
+
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+  proteoark:
+    build:
+      context: ./proteoark-fastapi/app
+    restart: always
+    image: 533267400310.dkr.ecr.us-west-1.amazonaws.com/ciods_2025_proteoark_fastapi
+    ports:
+      - "5050:5050"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
