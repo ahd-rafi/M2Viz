@@ -2,5 +2,3 @@ M2Viz is an all-in-one tool for creating compelling high-quality lollipop plots 
 Post-Translational Modifications, Single Amino Acid Variations, and DNA methylation to render publication-ready plots with effortlessly powerful visualization.
 
 
-
-
