@@ -1,0 +1,7 @@
+SAAV_Site,Frequency,type,description,start,end,Regulation,Sequence Length
+A34V,18,Domain,Kinase domain,50,300,Upregulation,2067
+G36S,41,Region,Activation loop,150,180,Upregulation,2067
+L75P,126,Motif,ATP binding site,30,40,No change,2067
+R112W,55,Domain,Kinase domain,50,300,Downregulation,2067
+E145K,30,Region,Activation loop,150,180,Upregulation,2067
+D198N,22,Coiled coil,Coiled-coil region,190,230,Downregulation,2067

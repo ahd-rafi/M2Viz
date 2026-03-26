@@ -1,0 +1,645 @@
+
+import { useState, useEffect } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
+import Papa from "papaparse";
+import { API_ENDPOINTS } from "../../constants/apiconfig/apiconfig";
+import Loadingspinner from "../components/UI/Loading";
+import { AlertCircle, X, Download, UploadCloud } from "lucide-react";
+import Breadcrumbs from '../constants/breadcrumbs';
+
+const SubmissionFormProtein = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [fileName, setFileName] = useState("");
+  const [isHovered, setIsHovered] = useState(false);
+  const [tableData, setTableData] = useState([]);
+  const [headers, setHeaders] = useState([]);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [showErrorModal, setShowErrorModal] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [selectedEndpoint, setSelectedEndpoint] = useState(null);
+  const [downloadBlob, setDownloadBlob] = useState(null);
+  const [downloadFilename, setDownloadFilename] = useState("");
+
+  const [plotMode, setPlotMode] = useState("uniprot"); // "uniprot" | "custom"
+  const [fastaInput, setFastaInput] = useState("");
+
+  const [formData, setFormData] = useState({
+    ACCESSION: "",
+    file: null,
+  });
+
+  // ✅ Features are now OPTIONAL — no mandatory check
+  const [selectedFeatures, setSelectedFeatures] = useState([]);
+  const [selectedOption, setSelectedOption] = useState(location.state?.selectedOption || "protein");
+
+  const closeErrorModal = () => {
+    setShowErrorModal(false);
+    setErrorMessage("");
+  };
+
+  useEffect(() => {
+    const savedState = location.state ?? (() => {
+      try {
+        return JSON.parse(localStorage.getItem("submissionFormState"));
+      } catch {
+        return null;
+      }
+    })();
+
+    if (savedState) {
+      setSelectedOption(savedState.selectedOption || "protein");
+      const { selectedType } = savedState;
+      const determineEndpoint = (selectedType) =>
+        selectedType === "profile"
+          ? API_ENDPOINTS.POST_PROTEIN_P_OUTPUT
+          : API_ENDPOINTS.POST_PROTEIN_D_OUTPUT;
+      setSelectedEndpoint({ endpoint: determineEndpoint(selectedType) });
+      localStorage.setItem("submissionFormState", JSON.stringify(savedState));
+    }
+  }, [location.state]);
+
+  const handleFeatureChange = (feature) => {
+    setSelectedFeatures((prev) =>
+      prev.includes(feature) ? prev.filter((f) => f !== feature) : [...prev, feature]
+    );
+  };
+
+  const getSelectedType = () => {
+    try {
+      const savedState = JSON.parse(localStorage.getItem("submissionFormState") || "{}");
+      return savedState.selectedType || "profile";
+    } catch {
+      return "profile";
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setErrorMessage("");
+
+    if (!formData.file) {
+      setErrorMessage("Please upload a file before submitting.");
+      setShowErrorModal(true);
+      return;
+    }
+
+    // ✅ REMOVED: mandatory feature check — features are now optional for UniProt mode too
+
+    if (plotMode === "custom" && (!fastaInput || fastaInput.trim() === "")) {
+      setErrorMessage("Please enter a FASTA sequence before submitting.");
+      setShowErrorModal(true);
+      return;
+    }
+
+    if (!selectedEndpoint || !selectedEndpoint.endpoint) {
+      setErrorMessage("Submission endpoint not set. Please reload the page.");
+      setShowErrorModal(true);
+      return;
+    }
+
+    setIsLoading(true);
+
+    const reader = new FileReader();
+    reader.onload = async ({ target }) => {
+      Papa.parse(target.result, {
+        header: true,
+        skipEmptyLines: false,
+        complete: async (result) => {
+          const rows = result.data;
+
+          if (plotMode === "custom") {
+            const csvHeaders = Object.keys(rows[0]);
+            const selectedType = getSelectedType();
+
+            const isSaav = csvHeaders.includes("SAAV_Site");
+
+            let requiredColumns = [];
+            if (isSaav) {
+              // SAAV custom: feature columns are optional
+              requiredColumns = ["SAAV_Site", "Frequency"];
+              if (selectedType === "differential") requiredColumns.push("Regulation");
+            } else {
+              // PTM custom: feature columns are optional
+              requiredColumns = ["PTM_Site", "Frequency", "PTM"];
+              if (selectedType === "differential") requiredColumns.push("Regulation");
+            }
+
+            const missing = requiredColumns.filter(col => !csvHeaders.includes(col));
+            if (missing.length > 0) {
+              setErrorMessage(`Missing required column(s): ${missing.join(", ")}`);
+              setShowErrorModal(true);
+              setIsLoading(false);
+              return;
+            }
+          }
+
+          if (!rows.length) {
+            setErrorMessage("The uploaded CSV appears empty.");
+            setShowErrorModal(true);
+            setIsLoading(false);
+            return;
+          }
+
+          const lastNonEmptyRowIndex = (() => {
+            for (let i = rows.length - 1; i >= 0; i--) {
+              const values = Object.values(rows[i]).map((val) => val?.trim?.() || "");
+              if (!values.every((v) => v === "")) return i;
+            }
+            return -1;
+          })();
+
+          for (let i = 0; i <= lastNonEmptyRowIndex; i++) {
+            const row = rows[i];
+
+            if (plotMode === "custom") {
+              const seqLen = row["Sequence Length"];
+              // Sequence Length is only required if it's present as a column
+              const csvHeaders = Object.keys(rows[0]);
+              if (csvHeaders.includes("Sequence Length") && (!seqLen || isNaN(seqLen))) {
+                setErrorMessage(`Row ${i + 2} has an invalid Sequence Length.`);
+                setShowErrorModal(true);
+                setIsLoading(false);
+                return;
+              }
+            }
+
+            const values = Object.values(row).map((val) => val?.trim?.() || "");
+            if (values.every((v) => v === "")) {
+              setErrorMessage(`Row ${i + 2} is completely empty. Please remove it.`);
+              setShowErrorModal(true);
+              setIsLoading(false);
+              return;
+            }
+            if (values.some((v) => v === "")) {
+              setErrorMessage(`Row ${i + 2} contains empty fields. Please fill or remove them.`);
+              setShowErrorModal(true);
+              setIsLoading(false);
+              return;
+            }
+          }
+
+          const data = new FormData();
+          data.append("plot_mode", plotMode);
+          data.append("csv_file", formData.file);
+
+          if (plotMode === "uniprot") {
+            data.append("ACCESSION", formData.ACCESSION);
+            const allFeatures = ["Region", "Domain", "Repeat", "Compositional bias", "Coiled coil", "Motif"];
+            const featuresDict = allFeatures.reduce((acc, feature) => {
+              acc[feature] = selectedFeatures.includes(feature);
+              return acc;
+            }, {});
+            // ✅ Always send feature_type — backend receives it as all-false if nothing selected
+            data.append("feature_type", JSON.stringify(featuresDict));
+          } else {
+            data.append("fasta_sequence", fastaInput.trim());
+          }
+
+          try {
+            const response = await fetch(selectedEndpoint.endpoint, {
+              method: "POST",
+              body: data,
+            });
+
+            if (!response.ok) {
+              const errorJson = await response.json();
+              setErrorMessage(errorJson.error || "An error occurred during processing.");
+              setShowErrorModal(true);
+              return;
+            }
+
+            const result = await response.json();
+            if (result.plot_img_base64) {
+              const category = location.state?.category || "protein";
+              const savedState = JSON.parse(localStorage.getItem("submissionFormState") || "{}");
+              const selectedType = savedState.selectedType || "profile";
+
+              navigate(`/m2viz/${category}/${selectedOption}/${selectedType}/${formData.ACCESSION || "custom"}`, {
+                state: {
+                  plotImage: result.plot_img_base64,
+                  csvData: rows,
+                  selectedOption,
+                  selectedType,
+                  category,
+                },
+              });
+            } else {
+              alert("Submission succeeded but no plot was returned.");
+            }
+          } catch (error) {
+            console.error("Network error:", error);
+            setErrorMessage("Network error. Please try again later.");
+            setShowErrorModal(true);
+          } finally {
+            setIsLoading(false);
+          }
+        },
+      });
+    };
+
+    reader.readAsText(formData.file);
+  };
+
+  const handleFileUpload = (file) => {
+    if (!file) return;
+    setFileName(file.name);
+    setFormData({ ...formData, file });
+    setErrorMessage("");
+  };
+
+  const handleLoadExample = async () => {
+    const option = selectedOption;
+    const savedState = (() => {
+      try {
+        return JSON.parse(localStorage.getItem("submissionFormState")) || {};
+      } catch {
+        return {};
+      }
+    })();
+
+    const type = savedState.selectedType || "profile";
+
+    if (!savedState.selectedType) {
+      alert("Could not determine selected type (profile/differential). Please reload.");
+      return;
+    }
+
+    let filePath = "";
+    let accession = "Q14669";
+
+    if (plotMode === "uniprot") {
+      if (option === "ptm" && type === "profile") {
+        filePath = "/assets/lollipop/PROT_ptm_profile.csv";
+      } else if (option === "ptm" && type === "differential") {
+        filePath = "/assets/lollipop/PROT_ptm_diff.csv";
+      } else if (option === "saav" && type === "profile") {
+        filePath = "/assets/lollipop/PROT_SAAVs_profile.csv";
+      } else if (option === "saav" && type === "differential") {
+        filePath = "/assets/lollipop/PROT_SAAVs_diff.csv";
+      } else {
+        alert("Invalid example selection.");
+        return;
+      }
+    } else {
+      if (option === "ptm" && type === "profile") {
+        filePath = "/assets/lollipop/CUSTOM_ptm_profile.csv";
+      } else if (option === "ptm" && type === "differential") {
+        filePath = "/assets/lollipop/CUSTOM_ptm_diff.csv";
+      } else if (option === "saav" && type === "profile") {
+        filePath = "/assets/lollipop/CUSTOM_SAAVs_profile.csv";
+      } else if (option === "saav" && type === "differential") {
+        filePath = "/assets/lollipop/CUSTOM_SAAVs_diff.csv";
+      } else {
+        alert("Invalid example selection.");
+        return;
+      }
+
+      const exampleFasta = `>sp|Q14669|TRIPC_HUMAN E3 ubiquitin-protein ligase TRIP12 OS=Homo sapiens OX=9606 GN=TRIP12 PE=1 SV=2
+MSNRPNNNPGGSLRRSQRNTAGAQPQDDSIGGRSHLGQAKHKGYSPPESRKSNSKAPKVQ
+SNTTSELSRGHLSKRSCSSSSAVIVPQPEDPDRANTSERQKTGQVPKKDNSRGVKRSASP
+DYNRTNSPSSAKKPKALQHTESPSETNKPHSKSKKRHLDQEQQLKSAQSPSTSKAHTRKS
+GATGGSRSQKRKRTESSCVKSGSGSESTGAEERSAKPTKLASKSATSAKAGCSTITDSSS
+AASTSSSSSAVASASSTVPPGARVKQGKDQNKARRSRSASSPSPRRSSREKEQSKTGGSS
+KFDWAARFSPKVSLPKTKLSLPGSSKSETSKPGPSGLQAKLASLRKSTKKRSESPPAELP
+SLRRSTRQKTTGSCASTSRRGSGLGKRGAAEARRQEKMADPESNQEAVNSSAARTDEAPQ
+GAAASSSVAGAVGMTTSGESESDDSEMGRLQALLEARGLPPHLFGPLGPRMSQLFHRTIG
+SGASSKAQQLLQGLQASDESQQLQAVIEMCQLLVMGNEETLGGFPVKSVVPALITLLQME
+HNFDIMNHACRALTYMMEALPRSSAVVVDAIPVFLEKLQVIQCIDVAEQALTALEMLSRR
+HSKAILQAGGLADCLLYLEFFSINAQRNALAIAANCCQSITPDEFHFVADSLPLLTQRLT
+HQDKKSVESTCLCFARLVDNFQHEENLLQQVASKDLLTNVQQLLVVTPPILSSGMFIMVV
+RMFSLMCSNCPTLAVQLMKQNIAETLHFLLCGASNGSCQEQIDLVPRSPQELYELTSLIC
+ELMPCLPKEGIFAVDTMLKKGNAQNTDGAIWQWRDDRGLWHPYNRIDSRIIEAAHQVGED
+EISLSTLGRVYTIDFNSMQQINEDTGTARAIQRKPNPLANSNTSGYSESKKDDARAQLMK
+EDPELAKSFIKTLFGVLYEVYSSSAGPAVRHKCLRAILRIIYFADAELLKDVLKNHAVSS
+HIASMLSSQDLKIVVGALQMAEILMQKLPDIFSVYFRREGVMHQVKHLAESESLLTSPPK
+ACTNGSGSMGSTTSVSSGTATAATHAAADLGSPSLQHSRDDSLDLSPQGRLSDVLKRKRL
+PKRGPRRPKYSPPRDDDKVDNQAKSPTTTQSPKSSFLASLNPKTWGRLSTQSNSNNIEPA
+RTAGGSGLARAASKDTISNNREKIKGWIKEQAHKFVERYFSSENMDGSNPALNVLQRLCA
+ATEQLNLQVDGGAECLVEIRSIVSESDVSSFEIQHSGFVKQLLLYLTSKSEKDAVSREIR
+LKRFLHVFFSSPLPGEEPIGRVEPVGNAPLLALVHKMNNCLSQMEQFPVKVHDFPSGNGT
+GGSFSLNRGSQALKFFNTHQLKCQLQRHPDCANVKQWKGGPVKIDPLALVQAIERYLVVR
+GYGRVREDDEDSDDDGSDEEIDESLAAQFLNSGNVRHRLQFYIGEHLLPYNMTVYQAVRQ
+FSIQAEDERESTDDESNPLGRAGIWTKTHTIWYKPVREDEESNKDCVGGKRGRAQTAPTK
+TSPRNAKKHDELWHDGVCPSVSNPLEVYLIPTPPENITFEDPSLDVILLLRVLHAISRYW
+YYLYDNAMCKEIIPTSEFINSKLTAKANRQLQDPLVIMTGNIPTWLTELGKTCPFFFPFD
+TRQMLFYVTAFDRDRAMQRLLDTNPEINQSDSQDSRVAPRLDRKKRTVNREELLKQAESV
+MQDLGSSRAMLEIQYENEVGTGLGPTLEFYALVSQELQRADLGLWRGEEVTLSNPKGSQE
+GTKYIQNLQGLFALPFGRTAKPAHIAKVKMKFRFLGKLMAKAIMDFRLVDLPLGLPFYKW
+MLRQETSLTSHDLFDIDPVVARSVYHLEDIVRQKKRLEQDKSQTKESLQYALETLTMNGC
+SVEDLGLDFTLPGFPNIELKKGGKDIPVTIHNLEEYLRLVIFWALNEGVSRQFDSFRDGF
+ESVFPLSHLQYFYPEELDQLLCGSKADTWDAKTLMECCRPDHGYTHDSRAVKFLFEILSS
+FDNEQQRLFLQFVTGSPRLPVGGFRSLNPPLTIVRKTFESTENPDDFLPSVMTCVNYLKL
+PDYSSIEIMREKLLIAAREGQQSFHLS`;
+      setFastaInput(exampleFasta);
+      accession = "custom";
+    }
+
+    setSelectedEndpoint({
+      endpoint:
+        type === "profile"
+          ? API_ENDPOINTS.POST_PROTEIN_P_OUTPUT
+          : API_ENDPOINTS.POST_PROTEIN_D_OUTPUT,
+    });
+
+    try {
+      const response = await fetch(filePath);
+      if (!response.ok) throw new Error("Failed to load example CSV");
+
+      const csvText = await response.text();
+
+      Papa.parse(csvText, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (result) => {
+          if (!result.data.length) {
+            alert("No data found in example CSV.");
+            return;
+          }
+
+          const fileName = filePath.split("/").pop();
+          const blob = new Blob([csvText], { type: "text/csv" });
+          const csvFile = new File([blob], fileName, { type: "text/csv" });
+
+          setFormData({ ACCESSION: accession, file: csvFile });
+          setFileName(fileName);
+          setHeaders(Object.keys(result.data[0]));
+          setTableData(result.data.slice(0, 5));
+          setDownloadBlob(blob);
+          setDownloadFilename(fileName);
+        },
+      });
+    } catch (error) {
+      console.error("Error loading example:", error);
+      alert("Could not load example file.");
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-100">
+        <Loadingspinner />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {showErrorModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 transform transition-all relative">
+            <div className="p-6">
+              <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full mb-4">
+                <AlertCircle className="h-6 w-6 text-purple-600" />
+              </div>
+              <div className="text-center">
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">Upload Error</h3>
+                <p className="text-gray-600 mb-6">{errorMessage}</p>
+              </div>
+              <div className="flex justify-center">
+                <button
+                  onClick={closeErrorModal}
+                  className="px-6 py-2 bg-purple-500 text-white rounded-md hover:bg-purple-700 focus:outline-none"
+                >
+                  Try Again
+                </button>
+              </div>
+              <button
+                onClick={closeErrorModal}
+                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="fixed top-16 left-4 z-50 p-2 max-w-xs">
+        <Breadcrumbs />
+      </div>
+
+      <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4 pt-20 sm:pt-24 md:pt-28 lg:pt-32 xl:pt-32">
+        <div className="bg-white shadow-lg rounded-lg p-8 w-full max-w-md">
+          <h2 className="text-2xl font-bold text-center text-gray-800">Upload Your File</h2>
+
+          {/* ── Plot Mode Toggle ── */}
+          <div className="mt-6 flex rounded-lg overflow-hidden border border-purple-300">
+            <button
+              type="button"
+              onClick={() => {
+                setPlotMode("uniprot");
+                setTableData([]); setHeaders([]);
+                setFileName(""); setFormData({ ACCESSION: "", file: null });
+                setFastaInput(""); setDownloadBlob(null); setDownloadFilename("");
+              }}
+              className={`flex-1 py-2 text-sm font-medium transition-colors ${
+                plotMode === "uniprot" ? "bg-purple-600 text-white" : "bg-white text-gray-600 hover:bg-purple-50"
+              }`}
+            >
+              UniProt Plot
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPlotMode("custom");
+                setTableData([]); setHeaders([]);
+                setFileName(""); setFormData({ ACCESSION: "", file: null });
+                setFastaInput(""); setDownloadBlob(null); setDownloadFilename("");
+              }}
+              className={`flex-1 py-2 text-sm font-medium transition-colors ${
+                plotMode === "custom" ? "bg-purple-600 text-white" : "bg-white text-gray-600 hover:bg-purple-50"
+              }`}
+            >
+              Custom Plot
+            </button>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4 pt-6">
+
+            {/* ── UniProt mode ── */}
+            {plotMode === "uniprot" && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">ACCESSION</label>
+                  <input
+                    type="text"
+                    name="ACCESSION"
+                    value={formData.ACCESSION}
+                    onChange={(e) => setFormData({ ...formData, ACCESSION: e.target.value })}
+                    placeholder="Enter UniProt Accession (e.g. Q14669)"
+                    className="mt-1 block w-full p-2 border rounded-md"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Select Structural Features{" "}
+                    <span className="text-xs text-gray-400 font-normal">(optional)</span>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {["Region", "Domain", "Repeat", "Compositional bias", "Coiled coil", "Motif"].map((feature) => (
+                      <label key={feature} className="flex items-center space-x-2 text-gray-700">
+                        <input
+                          type="checkbox"
+                          value={feature}
+                          checked={selectedFeatures.includes(feature)}
+                          onChange={() => handleFeatureChange(feature)}
+                          className="form-checkbox text-purple-600"
+                        />
+                        <span>{feature}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Leave unchecked to plot without protein domain annotations.
+                  </p>
+                </div>
+              </>
+            )}
+
+            {/* ── Custom mode ── */}
+            {plotMode === "custom" && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700">
+                  Protein FASTA Sequence
+                </label>
+                <textarea
+                  rows={6}
+                  value={fastaInput}
+                  onChange={(e) => setFastaInput(e.target.value)}
+                  placeholder={`>sp|Q14669|TRIPB_HUMAN Example protein\nMSSAAPPPPPPAEAAPAAPA...`}
+                  className="mt-1 block w-full p-2 border rounded-md font-mono text-xs resize-y"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Paste your FASTA sequence including the header line starting with &gt;
+                </p>
+              </div>
+            )}
+
+            {/* ── CSV Upload ── */}
+            <div>                
+                <label className="block text-sm font-medium text-gray-700">
+                  Upload CSV File
+
+                  <span className="ml-1 text-xs text-gray-400">
+                    (requires:
+                    {selectedOption === "ptm"
+                      ? " PTM_Site, Frequency, PTM"
+                      : " SAAV_Site, Frequency"}
+
+                    {plotMode === "custom" && ", Sequence Length"}
+
+                    {getSelectedType() === "differential" ? ", Regulation" : ""}
+
+                    {plotMode === "custom" &&
+                      " — optional feature columns: type, description, start, end"})
+                  </span>
+                </label>
+              <div
+                className={`border-2 border-dashed rounded-lg p-6 text-center transition-all ${
+                  isHovered ? "border-blue-500 bg-blue-50" : "border-gray-300"
+                }`}
+                onDragOver={(e) => { e.preventDefault(); setIsHovered(true); }}
+                onDragLeave={() => setIsHovered(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsHovered(false);
+                  const file = e.dataTransfer.files[0];
+                  if (!file.name.endsWith(".csv")) {
+                    alert("Only CSV files are supported.");
+                    return;
+                  }
+                  handleFileUpload(file);
+                }}
+              >
+                <p className="text-gray-600">{fileName || "Drop your file here or click to upload"}</p>
+                <input
+                  id="file"
+                  type="file"
+                  accept=".csv"
+                  className="hidden"
+                  onChange={(e) => handleFileUpload(e.target.files?.[0])}
+                />
+                <div className="flex justify-center">
+                  <UploadCloud
+                    className="mt-3 w-6 h-6 text-purple-600 cursor-pointer"
+                    onClick={() => document.getElementById("file")?.click()}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* ── Table Preview ── */}
+            {tableData.length > 0 && (
+              <div className="mt-4 p-4 border border-gray-300 rounded-lg bg-white shadow-lg relative">
+                <button
+                  onClick={() => {
+                    setFileName(""); setFormData({ ...formData, file: null });
+                    setTableData([]); setHeaders([]);
+                    setDownloadBlob(null); setDownloadFilename("");
+                  }}
+                  className="absolute top-2 right-2 text-gray-500 hover:text-red-600 text-xl font-bold"
+                  aria-label="Close preview"
+                >
+                  &times;
+                </button>
+                <div className="overflow-x-auto mt-4">
+                  <table className="min-w-full border-collapse border border-gray-300 text-sm">
+                    <thead>
+                      <tr className="bg-gray-200">
+                        {headers.map((header) => (
+                          <th key={header} className="border border-gray-300 px-2 py-1 text-center">{header}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tableData.map((row, rowIndex) => (
+                        <tr key={rowIndex}>
+                          {headers.map((header) => (
+                            <td key={header} className="border px-2 py-1 text-center">{row[header]}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {downloadBlob && downloadFilename && (
+                  <div className="mt-3 flex justify-end pr-2">
+                    <a
+                      href={URL.createObjectURL(downloadBlob)}
+                      download={downloadFilename}
+                      title="Download Example CSV"
+                      className="text-gray-400 hover:text-gray-600 p-2 rounded-full hover:bg-purple-100 transition-colors"
+                    >
+                      <Download className="w-5 h-5" />
+                    </a>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Submit + Example ── */}
+            <div className="flex flex-col space-y-4 sm:flex-row sm:space-y-0 sm:space-x-4">
+              <button
+                type="button"
+                className="w-full sm:w-1/2 py-2 bg-purple-100 text-purple-700 border border-purple-300 rounded-md hover:bg-purple-200"
+                onClick={handleLoadExample}
+              >
+                Load Example
+              </button>
+              <button
+                type="submit"
+                className="w-full sm:w-1/2 py-2 bg-purple-600 text-white text-lg font-semibold rounded-md hover:bg-purple-700"
+              >
+                Submit
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </>
+  );
+};
+
+export default SubmissionFormProtein;

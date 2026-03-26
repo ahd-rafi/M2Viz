@@ -1,0 +1,9 @@
+PTM_Site,Frequency,PTM,Description,Start,End,Sequence Length
+S34,18,Phosphorylation,Kinase domain,50,300,2067
+S36,41,Phosphorylation,Activation loop,150,180,2067
+S75,126,Phosphorylation,ATP binding site,30,40,2067
+T112,55,Phosphorylation,Kinase domain,50,300,2067
+Y145,30,Ubiquitination,Activation loop,150,180,2067
+K198,22,Acetylation,Coiled-coil region,190,230,2067
+S210,88,Phosphorylation,Kinase domain,50,300,2067
+T550,14,Phosphorylation,Ankyrin repeat 1,240,280,2067

@@ -1,0 +1,36 @@
+services:
+
+  # backend:
+  #   build: ./backend
+  #   container_name: m2viz-backend
+  #   restart: always
+  #   ports:
+  #     - "8000:8000"
+  #   networks:
+  #     - app-network
+
+  # frontend:
+  #   build: ./frontend
+  #   container_name: m2viz-frontend
+  #   restart: always
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - backend
+  #   networks:
+  #     - app-network
+
+  m2viz:
+    build: ./loliipop_R-master
+    container_name: m2viz-lollipop
+    restart: always
+    ports:
+      - "6000:8000"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
